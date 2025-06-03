@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8" />
+<title>P Diddy - Mete o Loko Fases + Ilha Secreta</title>
+<style>
+  * {
+    margin:0; padding:0; box-sizing: border-box;
+    user-select:none;
+  }
+  body {
+    background: linear-gradient(45deg, #111, #333);
+    font-family: 'Arial Black', Arial, sans-serif;
+    color: white;
+    overflow: hidden;
+  }
+  #gameCanvas {
+    display: block;
+    background: #222;
+    border: 5px solid white;
+    margin: 20px auto;
+    background-size: cover;
+  }
+  #ui {
+    text-align: center;
+    margin-top: 10px;
+  }
+  #hpBar {
+    width: 300px;
+    height: 25px;
+    background: #333;
+    margin: 10px auto;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 0 10px #f00 inset;
+  }
+  #hpFill {
+    height: 100%;
+    background: #f00;
+    width: 100%;
+    transition: width 0.3s ease-out;
+  }
+  button, select {
+    background: #ff0044;
+    border:none;
+    padding: 10px 15px;
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+    border-radius: 8px;
+    font-size: 16px;
+    margin: 0 8px 8px 8px;
+  }
+  button:disabled {
+    background: #880022;
+    cursor: not-allowed;
+  }
+  #gameOverScreen {
+    position: fixed;
+    top:0; left:0;
+    width: 100vw; height: 100vh;
+    background: rgba(0,0,0,0.9);
+    color: white;
+    font-size: 48px;
+    font-weight: 900;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+    display: none;
+    z-index: 1000;
+  }
+</style>
+</head>
+<body>
+
+  <div id="ui">
+    <select id="levelSelect">
+      <option value="0">Fase 1 - Cidade</option>
+      <option value="1">Fase 2 - Parque</option>
+      <option value="2">Fase 3 - Ilha Secreta</option>
+    </select>
+    <button id="startBtn">Começar</button>
+    <div id="hpBar"><div id="hpFill"></div></div>
+    <button id="teleportBtn">Teleporte (Q)</button>
+    <button id="shootBtn">Atirar (E)</button>
+  </div>
+
+  <canvas id="gameCanvas" width="900" height="500"></canvas>
+
+  <div id="gameOverScreen">
+    <div>💀 P Diddy MORREU! 💀</div>
+    <button id="restartBtn">Jogar de Novo</button>
+  </div>
+
+<script>
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const levelSelect = document.getElementById('levelSelect');
+  const startBtn = document.getElementById('startBtn');
+  const hpFill = document.getElementById('hpFill');
+  const teleportBtn = document.getElementById('teleportBtn');
+  const shootBtn = document.getElementById('shootBtn');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const restartBtn = document.getElementById('restartBtn');
+
+  const WIDTH = canvas.width;
+  const HEIGHT = canvas.height;
+
+  const playerImg = new Image();
+  playerImg.src = 'https://i.imgur.com/U9d2Vf7.png'; // P Diddy png transparente
+
+  // Player
+  const player = {
+    x: 50,
+    y: HEIGHT - 100,
+    w: 60,
+    h: 90,
+    speed: 5,
+    vy: 0,
+    gravity: 0.8,
+    jumpPower: 16,
+    onGround: false,
+    hp: 100,
+    maxHp: 100,
+    cooldowns: {
+      teleport: 0,
+      shoot: 0
+    },
+    bullets: [],
+    direction: 1, // 1 direita, -1 esquerda
+  };
+
+  // Plataformas para parkour
+  let platforms = [];
+
+  // Inimigos infinitos
+  let enemies = [];
+
+  // Game State
+  let currentLevel = 0;
+  let running = false;
+  let spawnTimer = 0;
+
+  // Definição das fases (plataformas, fundo, inimigos)
+  const levels = [
+    {
+      name: 'Cidade',
+      bg: 'casaete',
+      platforms: [
+        {x:0, y: HEIGHT-10, w: WIDTH, h: 10},
+        {x: 200, y: 400, w: 100, h: 10},
+        {x: 350, y: 350, w: 120, h: 10},
+        {x: 520, y: 300, w: 150, h: 10},
+        {x: 720, y: 250, w: 130, h: 10}
+      ]
+    },
+    {
+      name: 'Parque',
+      bg: 'favela.jpeg',
+      platforms: [
+        {x:0, y: HEIGHT-10, w: WIDTH, h: 10},
+        {x: 100, y: 420, w: 90, h: 10},
+        {x: 230, y: 370, w: 110, h: 10},
+        {x: 400, y: 330, w: 130, h: 10},
+        {x: 600, y: 280, w: 100, h: 10},
+        {x: 750, y: 230, w: 90, h: 10}
+      ]
+    },
+    {
+      name: 'Ilha Secreta',
+      bg: 'https://i.imgur.com/yo3Se6x.jpg',
+      platforms: [
+        {x:0, y: HEIGHT-10, w: WIDTH, h: 10},
+        {x: 150, y: 410, w: 110, h: 10},
+        {x: 320, y: 360, w: 100, h: 10},
+        {x: 480, y: 310, w: 140, h: 10},
+        {x: 650, y: 260, w: 130, h: 10},
+        {x: 800, y: 210, w: 80, h: 10},
+        {x: 850, y: 180, w: 50, h: 10} // Plataforma secreta menor
+      ]
+    }
+  ];
+
+  // Classe inimigo
+  class Enemy {
+    constructor(x, y){
+      this.x = x;
+      this.y = y;
+      this.w = 40;
+      this.h = 60;
+      this.speed = 2 + Math.random() * 1.5;
+      this.direction = Math.random() < 0.5 ? -1 : 1;
+      this.alive = true;
+      this.color = '#0077ff';
+      this.vy = 0;
+      this.gravity = 0.8;
+      this.onGround = false;
+    }
+    update(){
+      if(!this.alive) return;
+
+      // Movimenta inimigo no eixo x
+      this.x += this.speed * this.direction;
+
+      // Colisão com as plataformas (chão)
+      this.vy += this.gravity;
+      this.y += this.vy;
+
+      this.onGround = false;
+      for(let p of platforms){
+        if(this.x + this.w > p.x && this.x < p.x + p.w){
+          if(this.y + this.h >= p.y && this.y + this.h <= p.y + p.h + this.vy){
+            this.y = p.y - this.h;
+            this.vy = 0;
+            this.onGround = true;
+          }
+        }
+      }
+
+      // Muda direção se bater nas bordas do cenário
+      if(this.x < 0) this.direction = 1;
+      if(this.x + this.w > WIDTH) this.direction = -1;
+
+      // Colisão com player (dano)
+      if(this.x < player.x + player.w && this.x + this.w > player.x &&
+         this.y < player.y + player.h && this.y + this.h > player.y){
+        player.hp -= 0.5;
+        if(player.hp < 0) player.hp = 0;
+      }
+    }
+    draw(){
+      if(!this.alive) return;
+      ctx.fillStyle = this.color;
+      ctx.shadowColor = '#0077ff';
+      ctx.shadowBlur = 15;
+      ctx.fillRect(this.x, this.y, this.w, this.h);
+    }
+  }
+
+  // Função para resetar cooldown
+  function cooldownTimer() {
+    if(player.cooldowns.teleport > 0) player.cooldowns.teleport -= 1;
+    if(player.cooldowns.shoot > 0) player.cooldowns.shoot -= 1;
+  }
+
+  // Função para desenhar player
+  function drawPlayer() {
+    ctx.shadowColor = '#e60073';
+    ctx.shadowBlur = 20;
+    ctx.drawImage(playerImg, player.x, player.y, player.w, player.h);
+  }
+
+  // Desenhar plataformas
+  function drawPlatforms() {
+    ctx.fillStyle = '#4caf50';
+    ctx.shadowColor = '#00ff00';
+    ctx.shadowBlur = 15;
+    for(let p of platforms){
+      ctx.fillRect(p.x, p.y, p.w, p.h);
+    }
+  }
+
+  // Atualiza player (movimento, gravidade e colisão com plataformas)
+  function updatePlayer(){
+    player.vy += player.gravity;
+    player.y += player.vy;
+    player.onGround = false;
+    for(let p of platforms){
+      if(player.x + player.w > p.x && player.x < p.x + p.w){
+        if(player.y + player.h >= p.y && player.y + player.h <= p.y + p.h + player.vy){
+          player.y = p.y - player.h;
+          player.vy = 0;
+          player.onGround = true;
+        }
+      }
+    }
+
+    if(player.y + player.h > HEIGHT){
+      player.y = HEIGHT - player.h;
+      player.vy = 0;
+      player.onGround = true;
+    }
+  }
+
+  // Criar inimigos infinitos
+  function spawnEnemies(){
+    spawnTimer++;
+    if(spawnTimer > 90){ // Spawn a cada 1.5s (90 frames a 60fps)
+      let spawnX = Math.random() * (WIDTH - 50);
+      let spawnY = 0;
+      enemies.push(new Enemy(spawnX, spawnY));
+      spawnTimer = 0;
+    }
+  }
+
+  // Atualiza inimigos
+  function updateEnemies(){
+    enemies.forEach(e => e.update());
+    // Remove inimigos mortos fora da tela
+    enemies = enemies.filter(e => e.alive && e.y < HEIGHT + 100);
+  }
+
+  // Desenha inimigos
+  function drawEnemies(){
+    enemies.forEach(e => e.draw());
+  }
+
+  // Teclado
+  const keys = {};
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+  });
+  window.addEventListener('keyup', e => {
+    keys[e.key.toLowerCase()] = false;
+  });
+
+  // Movimenta player horizontalmente
+  function movePlayer(){
+    if(keys['a'] || keys['arrowleft']){
+      player.x -= player.speed;
+      player.direction = -1;
+    }
+    if(keys['d'] || keys['arrowright']){
+      player.x += player.speed;
+      player.direction = 1;
+    }
+  }
+
+  // Pular
+  function jump(){
+    if(player.onGround){
+      player.vy = -player.jumpPower;
+      player.onGround = false;
+    }
+  }
+
+  window.addEventListener('keydown', e => {
+    if(e.key === 'w' || e.key === 'arrowup' || e.key === ' '){
+      jump();
+    }
+  });
+
+  // Teleporte mágico (Q)
+  function teleport(){
+    if(player.cooldowns.teleport <= 0){
+      let dist = 150;
+      let newX = player.x + dist * player.direction;
+      if(newX < 0) newX = 0;
+      if(newX + player.w > WIDTH) newX = WIDTH - player.w;
+      player.x = newX;
+      player.cooldowns.teleport = 120; // cooldown 2s
+      playSound('teleport');
+    }
+  }
+
+  // Atirar (E)
+  function shoot(){
+    if(player.cooldowns.shoot <= 0){
+      player.bullets.push({
+        x: player.x + player.w / 2,
+        y: player.y + player.h / 2,
+        w: 8,
+        h: 4,
+        speed: 15 * player.direction,
+        alive: true
+      });
+      player.cooldowns.shoot = 30;
+      playSound('shoot');
+    }
+  }
+
+  // Atualiza balas
+  function updateBullets(){
+    player.bullets.forEach(bullet => {
+      if(!bullet.alive) return;
+      bullet.x += bullet.speed;
+
+      // Checar colisão com inimigos
+      enemies.forEach(enemy => {
+        if(enemy.alive &&
+          bullet.x < enemy.x + enemy.w &&
+          bullet.x + bullet.w > enemy.x &&
+          bullet.y < enemy.y + enemy.h &&
+          bullet.y + bullet.h > enemy.y){
+            enemy.alive = false;
+            bullet.alive = false;
+        }
+      });
+
+      if(bullet.x > WIDTH || bullet.x < 0){
+        bullet.alive = false;
+      }
+    });
+    // Remove balas mortas
+    player.bullets = player.bullets.filter(b => b.alive);
+  }
+
+  // Desenha balas
+  function drawBullets(){
+    ctx.fillStyle = '#ff0044';
+    player.bullets.forEach(bullet => {
+      if(bullet.alive)
+        ctx.fillRect(bullet.x, bullet.y, bullet.w, bullet.h);
+    });
+  }
+
+  // Atualiza HUD (barra de vida)
+  function updateHUD(){
+    hpFill.style.width = (player.hp / player.maxHp * 100) + '%';
+  }
+
+  // Game over
+  function gameOver(){
+    running = false;
+    gameOverScreen.style.display = 'flex';
+    teleportBtn.disabled = true;
+    shootBtn.disabled = true;
+  }
+
+  // Reiniciar
+  function restartGame(){
+    player.hp = player.maxHp;
+    player.x = 50;
+    player.y = HEIGHT - 100;
+    player.vy = 0;
+    player.bullets = [];
+    enemies = [];
+    gameOverScreen.style.display = 'none';
+    teleportBtn.disabled = false;
+    shootBtn.disabled = false;
+    spawnTimer = 0;
+    running = true;
+    loadLevel(currentLevel);
+    gameLoop();
+  }
+
+  // Load Level
+  function loadLevel(levelIndex){
+    currentLevel = levelIndex;
+    player.x = 50;
+    player.y = HEIGHT - 100;
+    player.vy = 0;
+    platforms = levels[levelIndex].platforms;
+    canvas.style.backgroundImage = `url(${levels[levelIndex].bg})`;
+    enemies = [];
+  }
+
+  // Sons simples
+  function playSound(name){
+    const sounds = {
+      teleport: 'https://freesound.org/data/previews/341/341695_3248244-lq.mp3',
+      shoot: 'https://freesound.org/data/previews/33/33749_512123-lq.mp3'
+    };
+    const audio = new Audio(sounds[name]);
+    audio.volume = 0.2;
+    audio.play();
+  }
+
+  // Game loop
+  function gameLoop(){
+    if(!running) return;
+
+    ctx.clearRect(0,0,WIDTH,HEIGHT);
+
+    cooldownTimer();
+
+    movePlayer();
+    updatePlayer();
+    spawnEnemies();
+    updateEnemies();
+    updateBullets();
+
+    drawPlatforms();
+    drawPlayer();
+    drawEnemies();
+    drawBullets();
+
+    updateHUD();
+
+    if(player.hp <= 0){
+      gameOver();
+      return;
+    }
+
+    requestAnimationFrame(gameLoop);
+  }
+
+  // Eventos UI
+  startBtn.addEventListener('click', () => {
+    loadLevel(parseInt(levelSelect.value));
+    running = true;
+    gameOverScreen.style.display = 'none';
+    teleportBtn.disabled = false;
+    shootBtn.disabled = false;
+    gameLoop();
+  });
+
+  teleportBtn.addEventListener('click', teleport);
+  shootBtn.addEventListener('click', shoot);
+  restartBtn.addEventListener('click', restartGame);
+
+  // Easter eggs ocultos: não vou contar nada, vai fuçando no código e jogando pra descobrir!
+
+</script>
+
+</body>
+</html>
